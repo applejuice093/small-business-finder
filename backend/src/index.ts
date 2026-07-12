@@ -168,6 +168,18 @@ app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promi
         [contact_status, business_ids]
       );
       res.json({ success: true, message: `Updated contact status to "${contact_status}" for ${business_ids.length} leads` });
+    } else if (action === 'approve') {
+      await db.query(
+        "UPDATE businesses SET approval_status = 'approved' WHERE id = ANY($1)",
+        [business_ids]
+      );
+      res.json({ success: true, message: `Approved ${business_ids.length} leads for outreach` });
+    } else if (action === 'reject') {
+      await db.query(
+        "UPDATE businesses SET approval_status = 'rejected' WHERE id = ANY($1)",
+        [business_ids]
+      );
+      res.json({ success: true, message: `Rejected ${business_ids.length} leads` });
     } else if (action === 'enroll_sequence') {
       const { sequence_id, enrolled_by } = params;
 

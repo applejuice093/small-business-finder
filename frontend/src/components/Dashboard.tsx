@@ -107,21 +107,29 @@ export default function Dashboard() {
     }
   };
 
-  const handleBulkAction = async (action: 'enroll' | 'status') => {
+  const handleBulkAction = async (action: 'enroll' | 'status' | 'approve' | 'reject') => {
     if (selectedLeads.length === 0) return;
     try {
+      let bodyData: any = {
+        business_ids: selectedLeads,
+        action: action === 'enroll' ? 'enroll_sequence' : 
+                action === 'approve' ? 'approve' : 
+                action === 'reject' ? 'reject' : 'update_status'
+      };
+      if (action === 'enroll') {
+        bodyData.params = {
+          sequence_id: 'c3b9b4f6-8c9e-4e4f-b4e6-8c9e4e4fb4e6' // Default sequence id
+        };
+      } else if (action === 'status') {
+        bodyData.params = {
+          contact_status: 'in_sequence'
+        };
+      }
+      
       const response = await fetch('http://localhost:3001/api/v1/leads/bulk-action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          business_ids: selectedLeads,
-          action: action === 'enroll' ? 'enroll_sequence' : 'update_status',
-          params: action === 'enroll' ? {
-            sequence_id: 'c3b9b4f6-8c9e-4e4f-b4e6-8c9e4e4fb4e6' // Dummy/first sequence id
-          } : {
-            contact_status: 'in_sequence'
-          }
-        })
+        body: JSON.stringify(bodyData)
       });
       if (response.ok) {
         const data = await response.json();
@@ -337,6 +345,18 @@ export default function Dashboard() {
               <span className="text-sm font-semibold text-indigo-200">leads selected for bulk operations</span>
             </div>
             <div className="flex items-center gap-2">
+              <button 
+                onClick={() => handleBulkAction('approve')}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
+              >
+                Approve
+              </button>
+              <button 
+                onClick={() => handleBulkAction('reject')}
+                className="px-3.5 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/20 rounded-xl text-xs font-bold transition-all"
+              >
+                Reject
+              </button>
               <button 
                 onClick={() => handleBulkAction('enroll')}
                 className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
