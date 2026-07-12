@@ -100,39 +100,16 @@ v                                                                              v
    psql -U postgres -d business_discovery_outreach -f schema.sql
    ```
 
-### 2. Backend Installation & Run
-1. Navigate to the `backend/` directory:
-   ```bash
-   cd backend
-   ```
-2. Install packages:
+### 2. Workspace Installation & Run
+1. From the project root directory, install all package dependencies across all workspace projects:
    ```bash
    pnpm install
    ```
-3. Set environment variables (create a `.env` file):
-   ```env
-   PORT=3001
-   DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/business_discovery_outreach
-   ```
-4. Start the API server in development mode:
+2. Start both the backend API server and the frontend Vite development server in parallel with a single command:
    ```bash
-   pnpm run dev
+   pnpm dev
    ```
-
-### 3. Frontend Installation & Run
-1. Navigate to the `frontend/` directory:
-   ```bash
-   cd ../frontend
-   ```
-2. Install packages:
-   ```bash
-   pnpm install
-   ```
-3. Start the Vite dev server:
-   ```bash
-   pnpm run dev
-   ```
-4. Access the dashboard at `http://localhost:5173`.
+3. Access the dashboard at `http://localhost:5173`.
 
 ---
 
