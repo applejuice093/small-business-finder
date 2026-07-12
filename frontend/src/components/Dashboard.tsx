@@ -446,15 +446,15 @@ export default function Dashboard() {
                           <div className="text-slate-500 text-xs mt-0.5">{lead.review_count} reviews</div>
                         </td>
                         <td className="py-5 px-5 text-slate-300 font-medium">
-                          {lead.distance_km ? `${lead.distance_km.toFixed(1)} km` : 'N/A'}
+                          {lead.distance_km ? `${Number(lead.distance_km).toFixed(1)} km` : 'N/A'}
                         </td>
                         <td className="py-5 px-5 text-center">
                           <span className={`px-3 py-1.5 rounded-full text-xs font-extrabold border ${
-                            lead.opportunity_score >= 80 
+                            Number(lead.opportunity_score) >= 80 
                               ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/20 shadow-lg shadow-emerald-950/20' 
                               : 'bg-amber-950/60 text-amber-300 border-amber-500/20 shadow-lg shadow-amber-950/20'
                           }`}>
-                            {lead.opportunity_score.toFixed(1)}
+                            {Number(lead.opportunity_score).toFixed(1)}
                           </span>
                         </td>
                         <td className="py-5 px-5">
