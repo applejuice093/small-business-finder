@@ -1,13 +1,25 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import { db } from './config/database.js';
-import { GooglePlacesConnector } from './scraper/connectors/google_places.js';
+import { OsmConnector } from './scraper/connectors/osm.js';
 import { processOutreachQueue } from './outreach/worker.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Native CORS headers middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
 
 app.use(express.json());
 
@@ -67,22 +79,23 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
     if (ref_lat && ref_lng) {
       const latNum = parseFloat(ref_lat as string);
       const lngNum = parseFloat(ref_lng as string);
-      queryParams.push(lngNum, latNum);
-      const paramLngIdx = queryParams.length - 1;
-      const paramLatIdx = queryParams.length;
-
-      // location <-> point(lng, lat) gives Euclidean distance in degrees.
-      // 1 degree ~ 111 km, or ~ 111000 meters.
-      const distanceCalc = `(location <-> point($${paramLngIdx}, $${paramLatIdx})) * 111.0`;
-      
-      queryParts[0] += `, ${distanceCalc} AS distance_km`;
-      
-      if (radius_meters) {
-        const radiusKm = parseFloat(radius_meters as string) / 1000.0;
-        queryParams.push(radiusKm);
-        whereClauses.push(`${distanceCalc} <= $${queryParams.length}`);
+      if (!isNaN(latNum) && !isNaN(lngNum)) {
+        // location <-> point(lng, lat) gives Euclidean distance in degrees.
+        // 1 degree ~ 111 km, or ~ 111000 meters.
+        const distanceCalc = `(location <-> point(${lngNum}, ${latNum})) * 111.0`;
+        
+        queryParts[0] += `, ${distanceCalc} AS distance_km`;
+        
+        if (radius_meters) {
+          const radiusKm = parseFloat(radius_meters as string) / 1000.0;
+          if (!isNaN(radiusKm)) {
+            whereClauses.push(`${distanceCalc} <= ${radiusKm}`);
+          }
+        }
       }
     }
+
+    queryParts.push('FROM businesses');
 
     // Append WHERE clauses to query strings
     if (whereClauses.length > 0) {
@@ -249,7 +262,7 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
   }
 
   try {
-    const connector = new GooglePlacesConnector('MOCK_API_KEY');
+    const connector = new OsmConnector();
     const scrapedLeads = await connector.scrape({
       query,
       latitude: parseFloat(latitude),
@@ -259,6 +272,17 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
 
     let savedCount = 0;
     for (const lead of scrapedLeads) {
+      // Deduplicate: check if this business from OSM has already been scraped
+      const existingSource = await db.query(
+        'SELECT business_id FROM business_sources WHERE source_name = $1 AND source_ref_id = $2',
+        ['osm', lead.sourceRefId]
+      );
+
+      if (existingSource.rows.length > 0) {
+        // Already exists, skip insertion to prevent duplicates
+        continue;
+      }
+
       // 1. Calculate Opportunity Score
       // Formula: weighted sum (no website: 50pts, social presence: 20pts, scale/rating/reviews: 30pts)
       let oppScore = 0;
@@ -300,7 +324,7 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
       await db.query(`
         INSERT INTO business_sources (business_id, source_name, source_ref_id, raw_payload)
         VALUES ($1, $2, $3, $4)
-      `, [businessId, 'google_places', lead.sourceRefId, JSON.stringify(lead.rawPayload)]);
+      `, [businessId, connector.sourceName, lead.sourceRefId, JSON.stringify(lead.rawPayload)]);
 
       // Insert primary phone contact if present
       if (lead.phone) {

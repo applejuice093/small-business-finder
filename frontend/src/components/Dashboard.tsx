@@ -55,106 +55,34 @@ export default function Dashboard() {
   const [activeLeadNotesId, setActiveLeadNotesId] = useState<string | null>(null);
   const [newNote, setNewNote] = useState('');
 
-  // Fetch leads from simulated endpoint or backend
-  useEffect(() => {
+  const fetchLeads = async () => {
     setLoading(true);
-    const timer = setTimeout(() => {
-      const mockData: Lead[] = [
-        {
-          id: '1',
-          name: 'Apex Plumbing Solutions',
-          category: 'Plumber',
-          address: '401 Pine St, Seattle, WA',
-          has_website: false,
-          scale: 'small',
-          review_count: 42,
-          review_rating: 4.6,
-          opportunity_score: 82.5,
-          contact_status: 'not_contacted',
-          distance_km: 1.4
-        },
-        {
-          id: '2',
-          name: 'Green Leaf Cafe',
-          category: 'Cafe',
-          address: '882 Pike St, Seattle, WA',
-          has_website: false,
-          scale: 'medium',
-          review_count: 185,
-          review_rating: 4.8,
-          opportunity_score: 95.0,
-          contact_status: 'in_sequence',
-          distance_km: 0.8
-        },
-        {
-          id: '3',
-          name: 'Belltown Dry Cleaners',
-          category: 'Dry Cleaner',
-          address: '1205 2nd Ave, Seattle, WA',
-          has_website: true,
-          website_url: 'https://belltowndrycleaners.com',
-          scale: 'solo',
-          review_count: 5,
-          review_rating: 3.9,
-          opportunity_score: 15.0,
-          contact_status: 'not_contacted',
-          distance_km: 2.1
-        },
-        {
-          id: '4',
-          name: 'Seattle Auto Repair',
-          category: 'Car Repair',
-          address: '2208 4th Ave, Seattle, WA',
-          has_website: false,
-          scale: 'medium',
-          review_count: 98,
-          review_rating: 4.1,
-          opportunity_score: 88.0,
-          contact_status: 'replied',
-          distance_km: 1.9
-        },
-        {
-          id: '5',
-          name: 'Emerald City Bakery',
-          category: 'Bakery',
-          address: '1500 E Pike St, Seattle, WA',
-          has_website: false,
-          scale: 'small',
-          review_count: 12,
-          review_rating: 4.5,
-          opportunity_score: 75.0,
-          contact_status: 'not_contacted',
-          distance_km: 3.2
-        }
-      ];
+    try {
+      const url = new URL('http://localhost:3001/api/v1/leads');
+      if (filterNoWebsite) url.searchParams.append('has_website', 'false');
+      if (filterScale !== 'all') url.searchParams.append('scale', filterScale);
+      if (filterStatus !== 'all') url.searchParams.append('contact_status', filterStatus);
+      if (searchTerm) url.searchParams.append('category', searchTerm);
+      url.searchParams.append('sort_by', sortBy === 'distance_km' ? 'distance' : sortBy);
+      url.searchParams.append('order', sortOrder);
+      url.searchParams.append('ref_lat', scrapeLat);
+      url.searchParams.append('ref_lng', scrapeLng);
 
-      let filtered = mockData.filter(lead => {
-        if (filterNoWebsite && lead.has_website) return false;
-        if (filterScale !== 'all' && lead.scale !== filterScale) return false;
-        if (filterStatus !== 'all' && lead.contact_status !== filterStatus) return false;
-        if (searchTerm) {
-          const matchName = lead.name.toLowerCase().includes(searchTerm.toLowerCase());
-          const matchCat = lead.category.toLowerCase().includes(searchTerm.toLowerCase());
-          if (!matchName && !matchCat) return false;
-        }
-        return true;
-      });
-
-      // Sort
-      filtered.sort((a, b) => {
-        let valA = a[sortBy] ?? 0;
-        let valB = b[sortBy] ?? 0;
-        if (typeof valA === 'string') valA = 0;
-        if (typeof valB === 'string') valB = 0;
-        return sortOrder === 'asc' ? valA - valB : valB - valA;
-      });
-
-      setLeads(filtered);
+      const res = await fetch(url.toString());
+      if (res.ok) {
+        const result = await res.json();
+        setLeads(result.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch leads from server:', error);
+    } finally {
       setLoading(false);
-    }, 450);
+    }
+  };
 
-    return () => clearTimeout(timer);
-  }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder]);
+  useEffect(() => {
+    fetchLeads();
+  }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder, scrapeLat, scrapeLng]);
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
@@ -179,28 +107,87 @@ export default function Dashboard() {
     }
   };
 
-  const handleBulkAction = (action: 'enroll' | 'status') => {
+  const handleBulkAction = async (action: 'enroll' | 'status') => {
     if (selectedLeads.length === 0) return;
-    alert(`Triggered ${action} action for: ${selectedLeads.join(', ')}`);
+    try {
+      const response = await fetch('http://localhost:3001/api/v1/leads/bulk-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business_ids: selectedLeads,
+          action: action === 'enroll' ? 'enroll_sequence' : 'update_status',
+          params: action === 'enroll' ? {
+            sequence_id: 'c3b9b4f6-8c9e-4e4f-b4e6-8c9e4e4fb4e6' // Dummy/first sequence id
+          } : {
+            contact_status: 'in_sequence'
+          }
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        alert(data.message);
+        setSelectedLeads([]);
+        fetchLeads();
+      } else {
+        const error = await response.json();
+        alert(`Error: ${error.error}`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Failed to execute bulk action.');
+    }
   };
 
   const runScraper = async (e: React.FormEvent) => {
     e.preventDefault();
     setScraping(true);
-    // Simulate scrape backend invocation
-    setTimeout(() => {
+    try {
+      const response = await fetch('http://localhost:3001/api/v1/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: scrapeQuery,
+          latitude: parseFloat(scrapeLat),
+          longitude: parseFloat(scrapeLng),
+          radius_meters: parseFloat(scrapeRadius)
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        alert(data.message);
+        setShowScrapeModal(false);
+        fetchLeads();
+      } else {
+        alert('Failed to start scraper. Please try again.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to connect to scraper API.');
+    } finally {
       setScraping(false);
-      setShowScrapeModal(false);
-      alert(`Scraped ${scrapeQuery} successfully! Loaded 8 new leads.`);
-    }, 1500);
+    }
   };
 
-  const addNote = (e: React.FormEvent) => {
+  const addNote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newNote.trim()) return;
-    alert(`Note added: "${newNote}"`);
-    setNewNote('');
-    setActiveLeadNotesId(null);
+    if (!newNote.trim() || !activeLeadNotesId) return;
+    try {
+      const response = await fetch(`http://localhost:3001/api/v1/leads/${activeLeadNotesId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: newNote })
+      });
+      if (response.ok) {
+        alert('Note added successfully!');
+        setNewNote('');
+        setActiveLeadNotesId(null);
+      } else {
+        alert('Failed to save note.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Network error while saving note.');
+    }
   };
 
   return (
