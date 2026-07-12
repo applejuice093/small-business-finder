@@ -62,7 +62,12 @@ async function dispatchMessage(
         from: `"LeadStream Pro Outreach" <${fromEmail}>`,
         to: recipient,
         subject: subject || 'Outreach from LeadStream Pro',
-        text: body || ''
+        text: body || '',
+        headers: {
+          'mld-track-opens': 'false',
+          'mld-track-inbox': 'true',
+          'mld-track-campaign-id': process.env.MAILERCLOUD_CAMPAIGN_ID || 'leadstream-outreach'
+        }
       };
 
       const info = await emailTransporter.sendMail(mailOptions);
