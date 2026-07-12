@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Additional custom styles if needed */
+body {
+  margin: 0;
+  background-color: #0f172a; /* matches bg-slate-900 */
+}
