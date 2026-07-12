@@ -279,6 +279,7 @@ export async function processOutreachQueue() {
 
 function replaceVariables(text: string, context: any): string {
   return text
+    .replace(/\\n/g, '\n')
     .replace(/\{\{\s*business_name\s*\}\}/g, context.business_name || 'Business')
     .replace(/\{\{\s*category\s*\}\}/g, context.business_category || 'industry')
     .replace(/\{\{\s*city\s*\}\}/g, context.business_city || 'your area');
