@@ -13,7 +13,12 @@ import {
   Settings,
   Database,
   Map,
-  X
+  X,
+  Play,
+  Pause,
+  Loader2,
+  CheckCircle2,
+  Clock
 } from 'lucide-react';
 
 interface Lead {
@@ -55,6 +60,65 @@ export default function Dashboard() {
   const [activeLeadNotesId, setActiveLeadNotesId] = useState<string | null>(null);
   const [newNote, setNewNote] = useState('');
 
+  // Outreach SPA States
+  const [currentTab, setCurrentTab] = useState<'leads' | 'sequences' | 'templates'>('leads');
+  const [sequences, setSequences] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [enrollments, setEnrollments] = useState<any[]>([]);
+  const [loadingOutreach, setLoadingOutreach] = useState(false);
+  const [processingQueue, setProcessingQueue] = useState(false);
+
+  const fetchOutreachData = async () => {
+    setLoadingOutreach(true);
+    try {
+      const [seqRes, tempRes, enrollRes] = await Promise.all([
+        fetch('http://localhost:3001/api/v1/outreach/sequences'),
+        fetch('http://localhost:3001/api/v1/outreach/templates'),
+        fetch('http://localhost:3001/api/v1/outreach/enrollments')
+      ]);
+      if (seqRes.ok) setSequences(await seqRes.json());
+      if (tempRes.ok) setTemplates(await tempRes.json());
+      if (enrollRes.ok) setEnrollments(await enrollRes.json());
+    } catch (e) {
+      console.error('Error fetching outreach data:', e);
+    } finally {
+      setLoadingOutreach(false);
+    }
+  };
+
+  const handleTogglePause = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/v1/outreach/enrollments/${id}/toggle-pause`, {
+        method: 'POST'
+      });
+      if (response.ok) {
+        fetchOutreachData();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleProcessQueue = async () => {
+    setProcessingQueue(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/v1/outreach/process', {
+        method: 'POST'
+      });
+      if (response.ok) {
+        await response.json();
+        alert('Queue processing complete!');
+        fetchOutreachData();
+        fetchLeads();
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Failed to process queue.');
+    } finally {
+      setProcessingQueue(false);
+    }
+  };
+
   const fetchLeads = async () => {
     setLoading(true);
     try {
@@ -82,6 +146,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchLeads();
+    fetchOutreachData();
   }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder, scrapeLat, scrapeLng]);
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -218,9 +283,24 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-4 text-xs font-semibold text-slate-400">
-            <span className="hover:text-white transition-colors cursor-pointer">Dashboard</span>
-            <span className="hover:text-white transition-colors cursor-pointer">Outreach Sequences</span>
-            <span className="hover:text-white transition-colors cursor-pointer">Templates</span>
+            <span 
+              onClick={() => setCurrentTab('leads')}
+              className={`hover:text-white transition-colors cursor-pointer ${currentTab === 'leads' ? 'text-indigo-400 font-extrabold' : ''}`}
+            >
+              Dashboard
+            </span>
+            <span 
+              onClick={() => setCurrentTab('sequences')}
+              className={`hover:text-white transition-colors cursor-pointer ${currentTab === 'sequences' ? 'text-indigo-400 font-extrabold' : ''}`}
+            >
+              Outreach Sequences
+            </span>
+            <span 
+              onClick={() => setCurrentTab('templates')}
+              className={`hover:text-white transition-colors cursor-pointer ${currentTab === 'templates' ? 'text-indigo-400 font-extrabold' : ''}`}
+            >
+              Templates
+            </span>
             <span className="w-px h-4 bg-slate-800" />
             <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-slate-300 cursor-pointer hover:bg-slate-700 transition-colors">
               <Settings className="w-4 h-4" />
@@ -229,8 +309,9 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* Main Container */}
       <main className="max-w-7xl mx-auto px-6 py-8 relative z-10">
+        {currentTab === 'leads' && (
+          <>
         {/* Hero Header */}
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-8">
           <div>
@@ -517,6 +598,276 @@ export default function Dashboard() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+        )}
+          </>
+        )}
+
+        {currentTab === 'sequences' && (
+          <div className="space-y-8 animate-in fade-in duration-300">
+            {/* Header */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div>
+                <h2 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+                  ⚡ Outreach Campaigns
+                </h2>
+                <p className="text-slate-400 text-sm mt-1.5 max-w-xl">
+                  Monitor campaign steps, channel delivery delays, and active enrollments.
+                </p>
+              </div>
+              <button
+                onClick={handleProcessQueue}
+                disabled={processingQueue}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-lg shadow-indigo-500/20 active:scale-95 cursor-pointer"
+              >
+                {processingQueue ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Processing...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 fill-white" /> Process Outreach Queue
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Grid of Sequences */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-white border-l-2 border-indigo-500 pl-3">Active Sequences</h3>
+              {loadingOutreach ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+                </div>
+              ) : sequences.length === 0 ? (
+                <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
+                  No active sequences found. Run seed script or create one.
+                </div>
+              ) : (
+                sequences.map((seq: any) => (
+                  <div key={seq.id} className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm relative overflow-hidden shadow-xl">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h4 className="text-lg font-bold text-white">{seq.name}</h4>
+                        <p className="text-slate-400 text-xs mt-1">{seq.description}</p>
+                      </div>
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-semibold px-2 py-0.5 rounded-full border border-emerald-500/30 uppercase tracking-wider">
+                        Active
+                      </span>
+                    </div>
+
+                    {/* Visual Steps Timeline */}
+                    <div className="mt-6 border-t border-slate-850 pt-6">
+                      <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Sequence Steps</h5>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative">
+                        {seq.steps?.map((step: any, index: number) => (
+                          <div key={step.id} className="relative flex flex-col bg-slate-955 border border-slate-850 rounded-xl p-4">
+                            {/* Connector line for large screens */}
+                            {index < seq.steps.length - 1 && (
+                              <div className="hidden md:block absolute top-1/2 -right-3 w-6 h-px bg-slate-800 z-0" />
+                            )}
+                            <div className="flex justify-between items-center mb-3">
+                              <span className="text-[10px] font-extrabold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md uppercase">
+                                Step {step.step_order}
+                              </span>
+                              {step.wait_days === 0 ? (
+                                <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md font-semibold">Immediate</span>
+                              ) : (
+                                <span className="text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md font-semibold flex items-center gap-1">
+                                  <Clock className="w-3 h-3" /> Wait {step.wait_days}d
+                                </span>
+                              )}
+                            </div>
+                            <h6 className="text-sm font-bold text-white truncate">{step.template_name}</h6>
+                            <div className="flex items-center gap-1.5 mt-2.5 text-xs text-slate-400">
+                              <span className="capitalize px-1.5 py-0.5 bg-slate-900 border border-slate-800 rounded font-semibold text-[10px]">
+                                {step.channel}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Active Enrollments */}
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl space-y-6">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-bold text-white border-l-2 border-indigo-500 pl-3">Active Enrollments</h3>
+                <span className="text-xs text-slate-400 font-semibold bg-slate-950/40 px-2.5 py-1 border border-slate-800 rounded-lg">
+                  {enrollments.length} total enrolled
+                </span>
+              </div>
+
+              {loadingOutreach ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+                </div>
+              ) : enrollments.length === 0 ? (
+                <div className="text-center py-12 text-slate-400 text-sm">
+                  No active enrollments yet. Go to the dashboard, select approved leads, and click "Enroll in Sequence".
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-left text-sm text-slate-300">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 font-semibold text-xs uppercase tracking-wider">
+                        <th className="py-4.5 px-4">Business</th>
+                        <th className="py-4.5 px-4">Sequence</th>
+                        <th className="py-4.5 px-4">Current Step</th>
+                        <th className="py-4.5 px-4">Last Status</th>
+                        <th className="py-4.5 px-4">Enrolled At</th>
+                        <th className="py-4.5 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-850/50">
+                      {enrollments.map((enroll: any) => (
+                        <tr key={enroll.id} className="hover:bg-slate-950/20 transition-colors">
+                          <td className="py-4 px-4">
+                            <div className="font-bold text-white">{enroll.business_name}</div>
+                            <div className="text-[10px] text-indigo-300 capitalize">{enroll.business_category}</div>
+                          </td>
+                          <td className="py-4 px-4 text-xs font-semibold">{enroll.sequence_name}</td>
+                          <td className="py-4 px-4">
+                            {enroll.completed_at ? (
+                              <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Completed
+                              </span>
+                            ) : (
+                              <span className="text-xs font-bold text-slate-300 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-full">
+                                Step {enroll.current_step}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-4">
+                            {enroll.last_sent_at ? (
+                              <div className="space-y-1">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${
+                                  enroll.last_status === 'sent' ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' :
+                                  enroll.last_status === 'failed' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' :
+                                  'bg-slate-800 text-slate-300'
+                                }`}>
+                                  {enroll.last_status}
+                                </span>
+                                <div className="text-[10px] text-slate-400">
+                                  {new Date(enroll.last_sent_at).toLocaleDateString(undefined, {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-500">Not started</span>
+                            )}
+                          </td>
+                          <td className="py-4 px-4 text-xs text-slate-400">
+                            {new Date(enroll.enrolled_at).toLocaleDateString(undefined, {
+                              month: 'short',
+                              day: 'numeric'
+                            })}
+                          </td>
+                          <td className="py-4 px-4 text-right">
+                            {!enroll.completed_at && (
+                              <button
+                                onClick={() => handleTogglePause(enroll.id)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ml-auto cursor-pointer ${
+                                  enroll.is_paused 
+                                    ? 'bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30' 
+                                    : 'bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 border border-amber-500/30'
+                                }`}
+                              >
+                                {enroll.is_paused ? (
+                                  <>
+                                    <Play className="w-3 h-3 fill-emerald-400" /> Resume
+                                  </>
+                                ) : (
+                                  <>
+                                    <Pause className="w-3 h-3 fill-amber-400" /> Pause
+                                  </>
+                                )}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {currentTab === 'templates' && (
+          <div className="space-y-8 animate-in fade-in duration-300">
+            {/* Header */}
+            <div>
+              <h2 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2.5">
+                ✉️ Outreach Templates
+              </h2>
+              <p className="text-slate-400 text-sm mt-1.5 max-w-xl">
+                Manage message templates with dynamic variable substitutions.
+              </p>
+            </div>
+
+            {/* Templates List */}
+            {loadingOutreach ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+              </div>
+            ) : templates.length === 0 ? (
+              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
+                No templates found. Run seed script or create one.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {templates.map((temp: any) => (
+                  <div key={temp.id} className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm flex flex-col justify-between shadow-xl relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/[0.02] rounded-full blur-2xl pointer-events-none" />
+                    <div>
+                      <div className="flex justify-between items-center mb-3">
+                        <h4 className="text-md font-bold text-white">{temp.name}</h4>
+                        <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border uppercase tracking-wider ${
+                          temp.channel === 'email' ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' :
+                          temp.channel === 'whatsapp' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
+                          'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                        }`}>
+                          {temp.channel}
+                        </span>
+                      </div>
+
+                      {temp.subject && (
+                        <div className="mb-3 text-xs">
+                          <span className="text-slate-400 font-semibold uppercase tracking-wider block mb-1">Subject</span>
+                          <div className="bg-slate-950/60 border border-slate-850 px-3 py-2 rounded-lg text-slate-200 font-medium">
+                            {temp.subject}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="text-xs">
+                        <span className="text-slate-400 font-semibold uppercase tracking-wider block mb-1">Body</span>
+                        <pre className="bg-slate-950/60 border border-slate-850 px-3.5 py-3 rounded-lg text-slate-300 font-mono text-[11px] leading-relaxed whitespace-pre-wrap font-sans">
+                          {temp.body.split(/({{[^{}]+}})/g).map((part: string, idx: number) => 
+                            part.startsWith('{{') && part.endsWith('}}') ? (
+                              <span key={idx} className="text-indigo-400 font-bold bg-indigo-500/10 px-1 py-0.5 rounded">
+                                {part}
+                              </span>
+                            ) : part
+                          )}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

@@ -361,6 +361,110 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
 });
 
 /**
+ * GET /api/v1/outreach/sequences
+ * Retrieve all sequences with steps and templates.
+ */
+app.get('/api/v1/outreach/sequences', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const sequences = await db.query('SELECT id, name, description, created_at FROM outreach_sequences');
+    const result = [];
+    for (const seq of sequences.rows) {
+      const steps = await db.query(`
+        SELECT s.id, s.step_order, s.wait_days, t.name as template_name, t.channel, t.subject, t.body
+        FROM outreach_sequence_steps s
+        JOIN outreach_templates t ON s.template_id = t.id
+        WHERE s.sequence_id = $1
+        ORDER BY s.step_order ASC
+      `, [seq.id]);
+      result.push({
+        ...seq,
+        steps: steps.rows
+      });
+    }
+    res.json(result);
+  } catch (error: any) {
+    console.error('API Error in GET /outreach/sequences:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+/**
+ * GET /api/v1/outreach/templates
+ * Retrieve all templates.
+ */
+app.get('/api/v1/outreach/templates', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const templates = await db.query('SELECT id, name, channel, subject, body, created_at FROM outreach_templates ORDER BY created_at DESC');
+    res.json(templates.rows);
+  } catch (error: any) {
+    console.error('API Error in GET /outreach/templates:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+/**
+ * GET /api/v1/outreach/enrollments
+ * Retrieve all enrollments with business, sequence details and last message status.
+ */
+app.get('/api/v1/outreach/enrollments', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enrollments = await db.query(`
+      SELECT 
+        e.id, 
+        e.current_step, 
+        e.is_paused,
+        e.enrolled_at, 
+        e.completed_at,
+        b.name as business_name, 
+        b.category as business_category,
+        s.name as sequence_name,
+        (
+          SELECT m.sent_at 
+          FROM outreach_messages m 
+          WHERE m.enrollment_id = e.id 
+          ORDER BY m.sent_at DESC LIMIT 1
+        ) as last_sent_at,
+        (
+          SELECT m.status 
+          FROM outreach_messages m 
+          WHERE m.enrollment_id = e.id 
+          ORDER BY m.sent_at DESC LIMIT 1
+        ) as last_status
+      FROM outreach_enrollments e
+      JOIN businesses b ON e.business_id = b.id
+      JOIN outreach_sequences s ON e.sequence_id = s.id
+      ORDER BY e.enrolled_at DESC
+    `);
+    res.json(enrollments.rows);
+  } catch (error: any) {
+    console.error('API Error in GET /outreach/enrollments:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+/**
+ * POST /api/v1/outreach/enrollments/:id/toggle-pause
+ * Toggle paused state for an enrollment.
+ */
+app.post('/api/v1/outreach/enrollments/:id/toggle-pause', async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  try {
+    const result = await db.query(
+      'UPDATE outreach_enrollments SET is_paused = NOT is_paused WHERE id = $1 RETURNING is_paused',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Enrollment not found' });
+      return;
+    }
+    res.json({ success: true, is_paused: result.rows[0].is_paused });
+  } catch (error: any) {
+    console.error('API Error in POST /outreach/enrollments/:id/toggle-pause:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+/**
  * POST /api/v1/outreach/process
  * Manually trigger sequence queue check run.
  */
