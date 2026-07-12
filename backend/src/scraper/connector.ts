@@ -7,6 +7,7 @@ export interface ScrapedBusiness {
   hasWebsite: boolean;
   websiteUrl?: string | null;
   phone?: string | null;
+  email?: string | null;
   scale: 'solo' | 'small' | 'medium' | 'large' | 'unknown';
   rating?: number | null;
   reviewCount: number;

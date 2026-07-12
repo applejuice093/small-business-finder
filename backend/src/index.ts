@@ -349,6 +349,18 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
           // Ignore unique contact value violation if duplicate
         }
       }
+      
+      // Insert primary email contact if present
+      if (lead.email) {
+        try {
+          await db.query(`
+            INSERT INTO contacts (business_id, contact_type, value, is_primary)
+            VALUES ($1, 'email', $2, true)
+          `, [businessId, lead.email]);
+        } catch (contactError) {
+          // Ignore unique contact value violation if duplicate
+        }
+      }
 
       savedCount++;
     }
