@@ -1,4 +1,6 @@
 import { db } from '../config/database.js';
+import nodemailer from 'nodemailer';
+import twilio from 'twilio';
 
 interface SequenceStep {
   id: string;
@@ -8,6 +10,111 @@ interface SequenceStep {
   channel: 'email' | 'whatsapp' | 'sms';
   subject?: string;
   body: string;
+}
+
+let cachedTransporter: nodemailer.Transporter | null = null;
+
+async function getTransporter(): Promise<nodemailer.Transporter> {
+  if (cachedTransporter) return cachedTransporter;
+
+  const host = process.env.SMTP_HOST;
+  const port = parseInt(process.env.SMTP_PORT || '587');
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  if (host && user && pass) {
+    console.log(`[SMTP Config] Using custom SMTP server: ${host}:${port} (${user})`);
+    cachedTransporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: process.env.SMTP_SECURE === 'true' || port === 465,
+      auth: { user, pass }
+    });
+  } else {
+    console.log('[SMTP Config] Credentials missing. Creating ephemeral Ethereal testing account...');
+    const testAccount = await nodemailer.createTestAccount();
+    console.log(`[Ethereal Account Created] User: ${testAccount.user}`);
+    cachedTransporter = nodemailer.createTransport({
+      host: testAccount.smtp.host,
+      port: testAccount.smtp.port,
+      secure: testAccount.smtp.secure,
+      auth: {
+        user: testAccount.user,
+        pass: testAccount.pass
+      }
+    });
+  }
+  return cachedTransporter;
+}
+
+async function dispatchMessage(
+  channel: 'email' | 'whatsapp' | 'sms',
+  recipient: string,
+  subject?: string,
+  body?: string
+): Promise<{ providerMsgId?: string; errorDetail?: string; status: 'sent' | 'failed' }> {
+  try {
+    if (channel === 'email') {
+      const emailTransporter = await getTransporter();
+      const fromEmail = process.env.SMTP_USER || 'no-reply@leadstreampro.com';
+      
+      const mailOptions = {
+        from: `"LeadStream Pro Outreach" <${fromEmail}>`,
+        to: recipient,
+        subject: subject || 'Outreach from LeadStream Pro',
+        text: body || ''
+      };
+
+      const info = await emailTransporter.sendMail(mailOptions);
+      const previewUrl = nodemailer.getTestMessageUrl(info);
+      if (previewUrl) {
+        console.log(`\n======================================================`);
+        console.log(`[ETHEREAL PREVIEW] Email sent to ${recipient}! View it here:`);
+        console.log(`${previewUrl}`);
+        console.log(`======================================================\n`);
+      }
+      return { providerMsgId: info.messageId, status: 'sent' };
+    }
+
+    if (channel === 'sms' || channel === 'whatsapp') {
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const fromNumber = channel === 'sms' 
+        ? (process.env.TWILIO_FROM_NUMBER || '+1234567890')
+        : (process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886');
+
+      if (accountSid && authToken) {
+        console.log(`[Twilio Client] Sending real ${channel} message to ${recipient} via ${fromNumber}...`);
+        const client = twilio(accountSid, authToken);
+        const toVal = channel === 'whatsapp' && !recipient.startsWith('whatsapp:')
+          ? `whatsapp:${recipient}`
+          : recipient;
+
+        const message = await client.messages.create({
+          body: body || '',
+          from: fromNumber,
+          to: toVal
+        });
+
+        return { providerMsgId: message.sid, status: 'sent' };
+      } else {
+        const mockSid = `mock_twilio_${channel}_` + Math.random().toString(36).substring(7);
+        console.log(`\n======================================================`);
+        console.log(`[TWILIO SIMULATOR] Credentials missing. Mocking ${channel} send:`);
+        console.log(`From: ${fromNumber}`);
+        console.log(`To: ${recipient}`);
+        console.log(`Body: ${body}`);
+        console.log(`Mock SID: ${mockSid}`);
+        console.log(`======================================================\n`);
+        return { providerMsgId: mockSid, status: 'sent' };
+      }
+    }
+
+    return { errorDetail: 'Unsupported channel', status: 'failed' };
+  } catch (e: any) {
+    console.error(`[Dispatch Error] Failed to send ${channel} message:`, e);
+    return { errorDetail: e.message || String(e), status: 'failed' };
+  }
 }
 
 export async function processOutreachQueue() {
@@ -90,15 +197,52 @@ export async function processOutreachQueue() {
         : undefined;
       const renderedBody = replaceVariables(step.body, enrollment);
 
-      // 5. Send message (Mock implementation showcasing integrations)
-      console.log(`[Outreach Worker] Dispatching Step ${step.step_order} via [${step.channel.toUpperCase()}] for "${enrollment.business_name}"`);
-      const providerMsgId = await sendMockMessage(step.channel, renderedSubject, renderedBody);
+      // 5. Fetch recipient contact details
+      const contactType = step.channel === 'email' ? 'email' : 'phone';
+      const contactQuery = await db.query(`
+        SELECT value FROM contacts
+        WHERE business_id = $1 AND contact_type = $2
+        ORDER BY is_primary DESC LIMIT 1
+      `, [enrollment.business_id, contactType]);
 
-      // 6. Log sent message in the database
+      const contactValue = contactQuery.rows[0]?.value;
+
+      if (!contactValue) {
+        const errorMsg = `No primary ${contactType} contact found for business "${enrollment.business_name}"`;
+        console.warn(`[Outreach Worker] ${errorMsg}`);
+        
+        // Log a failed message in the database
+        await db.query(`
+          INSERT INTO outreach_messages (
+            enrollment_id, business_id, channel, template_id, rendered_body, status, error_detail, sent_at
+          ) VALUES ($1, $2, $3, $4, $5, 'failed', $6, now())
+        `, [
+          enrollment.enrollment_id,
+          enrollment.business_id,
+          step.channel,
+          step.template_id,
+          renderedBody,
+          errorMsg
+        ]);
+        
+        // Increment current step order in the enrollment record to avoid locking the queue
+        await db.query(`
+          UPDATE outreach_enrollments
+          SET current_step = $1
+          WHERE id = $2
+        `, [step.step_order, enrollment.enrollment_id]);
+        continue;
+      }
+
+      // 6. Send message using the dispatcher helper
+      console.log(`[Outreach Worker] Dispatching Step ${step.step_order} via [${step.channel.toUpperCase()}] to ${contactValue} for "${enrollment.business_name}"`);
+      const dispatchResult = await dispatchMessage(step.channel, contactValue, renderedSubject, renderedBody);
+
+      // 7. Log message delivery in the database
       const messageIdQuery = await db.query(`
         INSERT INTO outreach_messages (
-          enrollment_id, business_id, channel, template_id, rendered_body, status, provider_msg_id, sent_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+          enrollment_id, business_id, channel, template_id, rendered_body, status, provider_msg_id, error_detail, sent_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
         RETURNING id
       `, [
         enrollment.enrollment_id,
@@ -106,20 +250,21 @@ export async function processOutreachQueue() {
         step.channel,
         step.template_id,
         renderedBody,
-        'sent',
-        providerMsgId
+        dispatchResult.status,
+        dispatchResult.providerMsgId || null,
+        dispatchResult.errorDetail || null
       ]);
 
       const messageId = messageIdQuery.rows[0].id;
 
-      // 7. Increment current step order in the enrollment record
+      // 8. Increment current step order in the enrollment record
       await db.query(`
         UPDATE outreach_enrollments
         SET current_step = $1
         WHERE id = $2
       `, [step.step_order, enrollment.enrollment_id]);
 
-      console.log(`[Outreach Worker] Successfully sent message ${messageId} and advanced enrollment to step ${step.step_order}.`);
+      console.log(`[Outreach Worker] Successfully processed message ${messageId} (status=${dispatchResult.status}) and advanced enrollment to step ${step.step_order}.`);
     }
 
   } catch (error) {
@@ -132,17 +277,4 @@ function replaceVariables(text: string, context: any): string {
     .replace(/\{\{\s*business_name\s*\}\}/g, context.business_name || 'Business')
     .replace(/\{\{\s*category\s*\}\}/g, context.business_category || 'industry')
     .replace(/\{\{\s*city\s*\}\}/g, context.business_city || 'your area');
-}
-
-async function sendMockMessage(channel: string, subject?: string, body?: string): Promise<string> {
-  // Simulate network delay
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  if (channel === 'email') {
-    return 'gmail_msg_' + Math.random().toString(36).substring(7);
-  } else if (channel === 'whatsapp') {
-    return 'whatsapp_sid_' + Math.random().toString(36).substring(7);
-  } else {
-    return 'twilio_sms_sid_' + Math.random().toString(36).substring(7);
-  }
 }
