@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -69,7 +69,7 @@ export default function Dashboard() {
   const [loadingOutreach, setLoadingOutreach] = useState(false);
   const [processingQueue, setProcessingQueue] = useState(false);
 
-  const fetchOutreachData = async () => {
+  const fetchOutreachData = useCallback(async () => {
     setLoadingOutreach(true);
     try {
       const [seqRes, tempRes, enrollRes] = await Promise.all([
@@ -85,7 +85,7 @@ export default function Dashboard() {
     } finally {
       setLoadingOutreach(false);
     }
-  };
+  }, []);
 
   const handleTogglePause = async (id: string) => {
     try {
@@ -120,7 +120,7 @@ export default function Dashboard() {
     }
   };
 
-  const fetchLeads = async () => {
+  const fetchLeads = useCallback(async () => {
     setLoading(true);
     try {
       const url = new URL(apiUrl('/api/v1/leads'));
@@ -143,12 +143,18 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder, scrapeLat, scrapeLng]);
 
+  // Re-fetch leads whenever a filter, sort option or reference point changes.
   useEffect(() => {
     fetchLeads();
+  }, [fetchLeads]);
+
+  // Outreach data does not depend on the lead filters, so load it once on mount
+  // (it is refreshed explicitly after pause/resume and queue runs).
+  useEffect(() => {
     fetchOutreachData();
-  }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder, scrapeLat, scrapeLng]);
+  }, [fetchOutreachData]);
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
