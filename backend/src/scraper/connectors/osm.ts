@@ -1,4 +1,8 @@
 import { BaseConnector, ScrapedBusiness, ScrapeContext } from '../connector.js';
+import { extractContactEmail, normalizeWebsiteUrl } from '../email.js';
+
+/** Max time to wait for a business homepage when crawling for an email. */
+const CRAWL_TIMEOUT_MS = 2000;
 
 export class OsmConnector extends BaseConnector {
   constructor() {
@@ -53,49 +57,10 @@ export class OsmConnector extends BaseConnector {
         
         // If there is no email from OSM tags but they have a website, try crawling the homepage for an email
         if (!business.email && business.websiteUrl) {
-          try {
-            console.log(`[OsmConnector] Crawling website for email: ${business.websiteUrl}`);
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout limit
-            
-            // Clean up and ensure website url has protocol
-            let targetUrl = business.websiteUrl.trim();
-            if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-              targetUrl = 'http://' + targetUrl;
-            }
-
-            const webRes = await fetch(targetUrl, { 
-              signal: controller.signal,
-              headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' 
-              } 
-            });
-            clearTimeout(timeoutId);
-            
-            if (webRes.ok) {
-              const html = await webRes.text();
-              // Scan for email patterns
-              const emailMatches = html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
-              if (emailMatches && emailMatches.length > 0) {
-                // Ignore static asset extensions and common placeholder domains
-                const foundEmail = emailMatches.find(e => 
-                  !e.endsWith('.png') && 
-                  !e.endsWith('.jpg') && 
-                  !e.endsWith('.jpeg') && 
-                  !e.endsWith('.gif') &&
-                  !e.endsWith('.svg') &&
-                  !e.endsWith('.webp') &&
-                  !e.includes('example.com') &&
-                  !e.includes('w3.org')
-                );
-                if (foundEmail) {
-                  console.log(`[OsmConnector] Found professional email for "${business.name}": ${foundEmail}`);
-                  business.email = foundEmail;
-                }
-              }
-            }
-          } catch (e) {
-            // Ignore crawl errors so scraper doesn't fail
+          const foundEmail = await this.crawlForEmail(business.websiteUrl);
+          if (foundEmail) {
+            console.log(`[OsmConnector] Found contact email for "${business.name}": ${foundEmail}`);
+            business.email = foundEmail;
           }
         }
         results.push(business);
@@ -105,6 +70,34 @@ export class OsmConnector extends BaseConnector {
     } catch (error) {
       console.error('[OsmConnector] Failed to fetch data from OpenStreetMap Overpass API:', error);
       return [];
+    }
+  }
+
+  /**
+   * Fetches a business homepage and returns the first plausible contact email.
+   * Network errors, timeouts and non-2xx responses are swallowed so a single
+   * slow website never fails the whole scrape.
+   */
+  private async crawlForEmail(websiteUrl: string): Promise<string | null> {
+    const targetUrl = normalizeWebsiteUrl(websiteUrl);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CRAWL_TIMEOUT_MS);
+    try {
+      console.log(`[OsmConnector] Crawling website for email: ${targetUrl}`);
+      const webRes = await fetch(targetUrl, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+      });
+      if (!webRes.ok) return null;
+      return extractContactEmail(await webRes.text());
+    } catch {
+      return null;
+    } finally {
+      // Always clear the timer, including when fetch throws (DNS failure,
+      // refused connection), so no stray timers keep the event loop busy.
+      clearTimeout(timeoutId);
     }
   }
 
