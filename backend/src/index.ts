@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { db } from './config/database.js';
 import { OsmConnector } from './scraper/connectors/osm.js';
 import { processOutreachQueue } from './outreach/worker.js';
+import { parseSortOrder } from './lib/validation.js';
 
 dotenv.config();
 
@@ -40,8 +41,12 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       limit = '20',
       page = '1',
       sort_by = 'opportunity_score',
-      order = 'desc',
+      order,
     } = req.query;
+
+    // `order` is interpolated into ORDER BY (it cannot be a bind parameter), so
+    // it must be whitelisted to 'asc' | 'desc' to prevent SQL injection.
+    const sortOrder = parseSortOrder(order);
 
     const limitVal = parseInt(limit as string, 10);
     const offsetVal = (parseInt(page as string, 10) - 1) * limitVal;
@@ -109,13 +114,13 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
     if (sort_by === 'distance' && ref_lat && ref_lng) {
       const latNum = parseFloat(ref_lat as string);
       const lngNum = parseFloat(ref_lng as string);
-      orderBy += `(location <-> point(${lngNum}, ${latNum})) ${order}`;
+      orderBy += `(location <-> point(${lngNum}, ${latNum})) ${sortOrder}`;
     } else if (sort_by === 'opportunity_score') {
-      orderBy += `opportunity_score ${order}`;
+      orderBy += `opportunity_score ${sortOrder}`;
     } else if (sort_by === 'review_count') {
-      orderBy += `review_count ${order}`;
+      orderBy += `review_count ${sortOrder}`;
     } else {
-      orderBy += `created_at ${order}`;
+      orderBy += `created_at ${sortOrder}`;
     }
     queryParts.push(orderBy);
 
