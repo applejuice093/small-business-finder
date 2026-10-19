@@ -4,6 +4,9 @@ import { extractContactEmail, normalizeWebsiteUrl } from '../email.js';
 /** Max time to wait for a business homepage when crawling for an email. */
 const CRAWL_TIMEOUT_MS = 2000;
 
+/** Public Overpass instance; override with OVERPASS_API_URL to use another mirror. */
+const DEFAULT_OVERPASS_URL = 'https://overpass.private.coffee/api/interpreter';
+
 export class OsmConnector extends BaseConnector {
   constructor() {
     super('osm');
@@ -30,11 +33,13 @@ export class OsmConnector extends BaseConnector {
     `;
 
     try {
-      const url = 'https://overpass.private.coffee/api/interpreter';
+      const url = process.env.OVERPASS_API_URL || DEFAULT_OVERPASS_URL;
+      // Overpass operators ask for a contact address in the User-Agent.
+      const contact = process.env.SCRAPER_CONTACT_EMAIL || 'contact-not-configured';
       const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'User-Agent': 'LeadStreamProScraper/1.0 (aniket@mydomain.com)',
+          'User-Agent': `LeadStreamProScraper/1.0 (${contact})`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: `data=${encodeURIComponent(overpassQuery)}`,
