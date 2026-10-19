@@ -1,6 +1,7 @@
 import { db } from '../config/database.js';
 import nodemailer from 'nodemailer';
 import twilio from 'twilio';
+import { renderTemplate } from './templates.js';
 
 interface SequenceStep {
   id: string;
@@ -198,9 +199,9 @@ export async function processOutreachQueue() {
 
       // 4. Parse the template with business context variables
       const renderedSubject = step.subject 
-        ? replaceVariables(step.subject, enrollment) 
+        ? renderTemplate(step.subject, enrollment) 
         : undefined;
-      const renderedBody = replaceVariables(step.body, enrollment);
+      const renderedBody = renderTemplate(step.body, enrollment);
 
       // 5. Fetch recipient contact details
       const contactType = step.channel === 'email' ? 'email' : 'phone';
@@ -275,12 +276,4 @@ export async function processOutreachQueue() {
   } catch (error) {
     console.error('[Outreach Worker] Error during worker run:', error);
   }
-}
-
-function replaceVariables(text: string, context: any): string {
-  return text
-    .replace(/\\n/g, '\n')
-    .replace(/\{\{\s*business_name\s*\}\}/g, context.business_name || 'Business')
-    .replace(/\{\{\s*category\s*\}\}/g, context.business_category || 'industry')
-    .replace(/\{\{\s*city\s*\}\}/g, context.business_city || 'your area');
 }
