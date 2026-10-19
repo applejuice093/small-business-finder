@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { db } from './config/database.js';
 import { OsmConnector } from './scraper/connectors/osm.js';
 import { processOutreachQueue } from './outreach/worker.js';
+import { calculateOpportunityScore } from './lib/scoring.js';
 import {
   parseSortOrder,
   parsePagination,
@@ -374,17 +375,8 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
         continue;
       }
 
-      // 1. Calculate Opportunity Score
-      // Formula: weighted sum (no website: 50pts, social presence: 20pts, scale/rating/reviews: 30pts)
-      let oppScore = 0;
-      if (!lead.hasWebsite) oppScore += 50;
-      
-      const rating = lead.rating || 0;
-      if (lead.reviewCount > 50 && rating > 4.0) {
-        oppScore += 30; // Active but invisible
-      } else if (lead.reviewCount > 10) {
-        oppScore += 15;
-      }
+      // 1. Calculate Opportunity Score (see src/lib/scoring.ts for the weighting)
+      const oppScore = calculateOpportunityScore(lead);
 
       // 2. Insert or update in database (deduplicating using sourceRefId)
       // Since schema.sql has UNIQUE (business_id, source_name, source_ref_id) in business_sources,
