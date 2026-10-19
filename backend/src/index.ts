@@ -282,10 +282,18 @@ app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promi
  */
 app.post('/api/v1/leads/:id/notes', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const { note, author_id } = req.body;
+  const { note, author_id } = req.body ?? {};
 
-  if (!note) {
+  if (!isUuid(id)) {
+    res.status(400).json({ error: 'Lead id must be a UUID' });
+    return;
+  }
+  if (typeof note !== 'string' || note.trim() === '') {
     res.status(400).json({ error: 'note content is required' });
+    return;
+  }
+  if (author_id !== undefined && author_id !== null && !isUuid(author_id)) {
+    res.status(400).json({ error: 'author_id must be a UUID when provided' });
     return;
   }
 
@@ -298,11 +306,16 @@ app.post('/api/v1/leads/:id/notes', async (req: Request, res: Response): Promise
 
     await db.query(
       'INSERT INTO business_notes (business_id, author_id, note) VALUES ($1, $2, $3)',
-      [id, authorId, note]
+      [id, authorId, note.trim()]
     );
 
     res.json({ success: true, message: 'Note added successfully' });
-  } catch (error) {
+  } catch (error: any) {
+    // 23503 = foreign_key_violation: the lead (or author) does not exist.
+    if (error?.code === '23503') {
+      res.status(404).json({ error: 'Lead not found' });
+      return;
+    }
     console.error('API Error in POST /leads/:id/notes:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
@@ -507,6 +520,10 @@ app.get('/api/v1/outreach/enrollments', async (req: Request, res: Response): Pro
  */
 app.post('/api/v1/outreach/enrollments/:id/toggle-pause', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  if (!isUuid(id)) {
+    res.status(400).json({ error: 'Enrollment id must be a UUID' });
+    return;
+  }
   try {
     const result = await db.query(
       'UPDATE outreach_enrollments SET is_paused = NOT is_paused WHERE id = $1 RETURNING is_paused',
