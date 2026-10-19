@@ -3,11 +3,25 @@ import dotenv from 'dotenv';
 import { db } from './config/database.js';
 import { OsmConnector } from './scraper/connectors/osm.js';
 import { processOutreachQueue } from './outreach/worker.js';
+import { calculateOpportunityScore } from './lib/scoring.js';
+import {
+  parseSortOrder,
+  parsePagination,
+  parseLatitude,
+  parseLongitude,
+  parseFiniteNumber,
+  isBusinessScale,
+  isContactStatus,
+  isUuid,
+} from './lib/validation.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+const DEFAULT_SCRAPE_RADIUS_METERS = 5000;
+const MAX_SCRAPE_RADIUS_METERS = 50000;
 
 // Native CORS headers middleware
 app.use((req, res, next) => {
@@ -37,14 +51,19 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       ref_lat,
       ref_lng,
       radius_meters,
-      limit = '20',
-      page = '1',
+      limit,
+      page,
       sort_by = 'opportunity_score',
-      order = 'desc',
+      order,
     } = req.query;
 
-    const limitVal = parseInt(limit as string, 10);
-    const offsetVal = (parseInt(page as string, 10) - 1) * limitVal;
+    // `order` is interpolated into ORDER BY (it cannot be a bind parameter), so
+    // it must be whitelisted to 'asc' | 'desc' to prevent SQL injection.
+    const sortOrder = parseSortOrder(order);
+
+    // Clamp pagination to positive integers (limit capped at MAX_PAGE_SIZE) so
+    // ?limit=abc or ?page=-1 no longer produce NaN / negative OFFSET errors.
+    const { limit: limitVal, page: pageVal, offset: offsetVal } = parsePagination(limit, page);
 
     let queryParts = ['SELECT id, name, category, address, location, has_website, website_url, scale, review_count, review_rating, opportunity_score, contact_status, confidence_score, created_at'];
     let countQueryParts = ['SELECT COUNT(*) FROM businesses'];
@@ -55,6 +74,17 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
     if (has_website !== undefined) {
       queryParams.push(has_website === 'true');
       whereClauses.push(`has_website = $${queryParams.length}`);
+    }
+
+    // Reject unknown enum values up front; otherwise PostgreSQL throws
+    // "invalid input value for enum" and the client gets an opaque 500.
+    if (scale && !isBusinessScale(scale)) {
+      res.status(400).json({ error: `Invalid scale "${String(scale)}"` });
+      return;
+    }
+    if (contact_status && !isContactStatus(contact_status)) {
+      res.status(400).json({ error: `Invalid contact_status "${String(contact_status)}"` });
+      return;
     }
 
     // Filter by business scale
@@ -75,23 +105,24 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       whereClauses.push(`category ILIKE $${queryParams.length}`);
     }
 
-    // Calculate distance if coordinates provided (PostgreSQL POINT type distance operator <->)
-    if (ref_lat && ref_lng) {
-      const latNum = parseFloat(ref_lat as string);
-      const lngNum = parseFloat(ref_lng as string);
-      if (!isNaN(latNum) && !isNaN(lngNum)) {
-        // location <-> point(lng, lat) gives Euclidean distance in degrees.
-        // 1 degree ~ 111 km, or ~ 111000 meters.
-        const distanceCalc = `(location <-> point(${lngNum}, ${latNum})) * 111.0`;
-        
-        queryParts[0] += `, ${distanceCalc} AS distance_km`;
-        
-        if (radius_meters) {
-          const radiusKm = parseFloat(radius_meters as string) / 1000.0;
-          if (!isNaN(radiusKm)) {
-            whereClauses.push(`${distanceCalc} <= ${radiusKm}`);
-          }
-        }
+    // Reference point used for distance calculation / sorting (null if absent or invalid).
+    const refLat = parseLatitude(ref_lat);
+    const refLng = parseLongitude(ref_lng);
+    const hasRefPoint = refLat !== null && refLng !== null;
+
+    // Calculate distance if coordinates provided (PostgreSQL POINT type distance operator <->).
+    // refLat/refLng are validated finite numbers, so interpolating them is safe.
+    if (hasRefPoint) {
+      // location <-> point(lng, lat) gives Euclidean distance in degrees.
+      // 1 degree ~ 111 km, or ~ 111000 meters (an approximation that ignores
+      // longitude shrinking towards the poles).
+      const distanceCalc = `(location <-> point(${refLng}, ${refLat})) * 111.0`;
+
+      queryParts[0] += `, ${distanceCalc} AS distance_km`;
+
+      const radiusMeters = parseFiniteNumber(radius_meters);
+      if (radiusMeters !== null && radiusMeters > 0) {
+        whereClauses.push(`${distanceCalc} <= ${radiusMeters / 1000.0}`);
       }
     }
 
@@ -106,16 +137,15 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
 
     // Sorting
     let orderBy = 'ORDER BY ';
-    if (sort_by === 'distance' && ref_lat && ref_lng) {
-      const latNum = parseFloat(ref_lat as string);
-      const lngNum = parseFloat(ref_lng as string);
-      orderBy += `(location <-> point(${lngNum}, ${latNum})) ${order}`;
+    if (sort_by === 'distance' && hasRefPoint) {
+      // refLat/refLng are validated finite numbers, so interpolation is safe.
+      orderBy += `(location <-> point(${refLng}, ${refLat})) ${sortOrder}`;
     } else if (sort_by === 'opportunity_score') {
-      orderBy += `opportunity_score ${order}`;
+      orderBy += `opportunity_score ${sortOrder}`;
     } else if (sort_by === 'review_count') {
-      orderBy += `review_count ${order}`;
+      orderBy += `review_count ${sortOrder}`;
     } else {
-      orderBy += `created_at ${order}`;
+      orderBy += `created_at ${sortOrder}`;
     }
     queryParts.push(orderBy);
 
@@ -137,7 +167,7 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       data: dataResult.rows,
       pagination: {
         total: totalLeads,
-        page: parseInt(page as string, 10),
+        page: pageVal,
         limit: limitVal,
         pages: Math.ceil(totalLeads / limitVal),
       },
@@ -153,16 +183,29 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
  * Perform actions (enrollment, tagging, status update) on multiple leads.
  */
 app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promise<void> => {
-  const { business_ids, action, params } = req.body;
+  const { business_ids, action } = req.body ?? {};
+  // `params` is optional for approve/reject; default to {} so destructuring
+  // below cannot throw "Cannot destructure property of undefined".
+  const params = req.body?.params ?? {};
 
   if (!business_ids || !Array.isArray(business_ids) || business_ids.length === 0) {
     res.status(400).json({ error: 'business_ids array is required' });
     return;
   }
 
+  const invalidIds = business_ids.filter((id: unknown) => !isUuid(id));
+  if (invalidIds.length > 0) {
+    res.status(400).json({ error: `business_ids must be UUIDs (invalid: ${invalidIds.slice(0, 5).join(', ')})` });
+    return;
+  }
+
   try {
     if (action === 'update_status') {
       const { contact_status } = params;
+      if (!isContactStatus(contact_status)) {
+        res.status(400).json({ error: `params.contact_status must be a valid contact status` });
+        return;
+      }
       await db.query(
         'UPDATE businesses SET contact_status = $1 WHERE id = ANY($2)',
         [contact_status, business_ids]
@@ -182,6 +225,14 @@ app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promi
       res.json({ success: true, message: `Rejected ${business_ids.length} leads` });
     } else if (action === 'enroll_sequence') {
       const { sequence_id, enrolled_by } = params;
+      if (!isUuid(sequence_id)) {
+        res.status(400).json({ error: 'params.sequence_id (UUID) is required for enroll_sequence' });
+        return;
+      }
+      if (enrolled_by !== undefined && !isUuid(enrolled_by)) {
+        res.status(400).json({ error: 'params.enrolled_by must be a UUID when provided' });
+        return;
+      }
 
       // First retrieve/create default user if no uuid was provided
       let userId = enrolled_by;
@@ -235,10 +286,18 @@ app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promi
  */
 app.post('/api/v1/leads/:id/notes', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const { note, author_id } = req.body;
+  const { note, author_id } = req.body ?? {};
 
-  if (!note) {
+  if (!isUuid(id)) {
+    res.status(400).json({ error: 'Lead id must be a UUID' });
+    return;
+  }
+  if (typeof note !== 'string' || note.trim() === '') {
     res.status(400).json({ error: 'note content is required' });
+    return;
+  }
+  if (author_id !== undefined && author_id !== null && !isUuid(author_id)) {
+    res.status(400).json({ error: 'author_id must be a UUID when provided' });
     return;
   }
 
@@ -251,11 +310,16 @@ app.post('/api/v1/leads/:id/notes', async (req: Request, res: Response): Promise
 
     await db.query(
       'INSERT INTO business_notes (business_id, author_id, note) VALUES ($1, $2, $3)',
-      [id, authorId, note]
+      [id, authorId, note.trim()]
     );
 
     res.json({ success: true, message: 'Note added successfully' });
-  } catch (error) {
+  } catch (error: any) {
+    // 23503 = foreign_key_violation: the lead (or author) does not exist.
+    if (error?.code === '23503') {
+      res.status(404).json({ error: 'Lead not found' });
+      return;
+    }
     console.error('API Error in POST /leads/:id/notes:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
@@ -266,20 +330,36 @@ app.post('/api/v1/leads/:id/notes', async (req: Request, res: Response): Promise
  * Manually trigger scraping for a location/query.
  */
 app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> => {
-  const { query, latitude, longitude, radius_meters } = req.body;
+  const { query, latitude, longitude, radius_meters } = req.body ?? {};
 
-  if (!query || latitude === undefined || longitude === undefined) {
+  if (typeof query !== 'string' || query.trim() === '' || latitude === undefined || longitude === undefined) {
     res.status(400).json({ error: 'query, latitude, and longitude are required' });
+    return;
+  }
+
+  const lat = parseLatitude(latitude);
+  const lng = parseLongitude(longitude);
+  if (lat === null || lng === null) {
+    res.status(400).json({ error: 'latitude must be within [-90, 90] and longitude within [-180, 180]' });
+    return;
+  }
+
+  // Default 5 km; cap at 50 km to keep Overpass queries (and email crawling) bounded.
+  const radiusMeters = radius_meters === undefined || radius_meters === null || radius_meters === ''
+    ? DEFAULT_SCRAPE_RADIUS_METERS
+    : parseFiniteNumber(radius_meters);
+  if (radiusMeters === null || radiusMeters <= 0 || radiusMeters > MAX_SCRAPE_RADIUS_METERS) {
+    res.status(400).json({ error: `radius_meters must be a number between 1 and ${MAX_SCRAPE_RADIUS_METERS}` });
     return;
   }
 
   try {
     const connector = new OsmConnector();
     const scrapedLeads = await connector.scrape({
-      query,
-      latitude: parseFloat(latitude),
-      longitude: parseFloat(longitude),
-      radiusMeters: parseFloat(radius_meters || '5000')
+      query: query.trim(),
+      latitude: lat,
+      longitude: lng,
+      radiusMeters,
     });
 
     let savedCount = 0;
@@ -295,17 +375,8 @@ app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> =>
         continue;
       }
 
-      // 1. Calculate Opportunity Score
-      // Formula: weighted sum (no website: 50pts, social presence: 20pts, scale/rating/reviews: 30pts)
-      let oppScore = 0;
-      if (!lead.hasWebsite) oppScore += 50;
-      
-      const rating = lead.rating || 0;
-      if (lead.reviewCount > 50 && rating > 4.0) {
-        oppScore += 30; // Active but invisible
-      } else if (lead.reviewCount > 10) {
-        oppScore += 15;
-      }
+      // 1. Calculate Opportunity Score (see src/lib/scoring.ts for the weighting)
+      const oppScore = calculateOpportunityScore(lead);
 
       // 2. Insert or update in database (deduplicating using sourceRefId)
       // Since schema.sql has UNIQUE (business_id, source_name, source_ref_id) in business_sources,
@@ -460,6 +531,10 @@ app.get('/api/v1/outreach/enrollments', async (req: Request, res: Response): Pro
  */
 app.post('/api/v1/outreach/enrollments/:id/toggle-pause', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  if (!isUuid(id)) {
+    res.status(400).json({ error: 'Enrollment id must be a UUID' });
+    return;
+  }
   try {
     const result = await db.query(
       'UPDATE outreach_enrollments SET is_paused = NOT is_paused WHERE id = $1 RETURNING is_paused',
@@ -485,7 +560,7 @@ app.post('/api/v1/outreach/process', async (req: Request, res: Response): Promis
     await processOutreachQueue();
     res.json({ success: true, message: 'Outreach queue processing complete' });
   } catch (error) {
-    console.error(error);
+    console.error('API Error in POST /outreach/process:', error);
     res.status(500).json({ error: 'Worker failed to run' });
   }
 });

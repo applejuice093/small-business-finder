@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -20,6 +20,17 @@ import {
   CheckCircle2,
   Clock
 } from 'lucide-react';
+import { apiUrl } from '../config.js';
+
+/** Extracts the backend's `{ error }` message from a failed response, if any. */
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    return typeof body?.error === 'string' ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 interface Lead {
   id: string;
@@ -68,13 +79,13 @@ export default function Dashboard() {
   const [loadingOutreach, setLoadingOutreach] = useState(false);
   const [processingQueue, setProcessingQueue] = useState(false);
 
-  const fetchOutreachData = async () => {
+  const fetchOutreachData = useCallback(async () => {
     setLoadingOutreach(true);
     try {
       const [seqRes, tempRes, enrollRes] = await Promise.all([
-        fetch('http://localhost:3001/api/v1/outreach/sequences'),
-        fetch('http://localhost:3001/api/v1/outreach/templates'),
-        fetch('http://localhost:3001/api/v1/outreach/enrollments')
+        fetch(apiUrl('/api/v1/outreach/sequences')),
+        fetch(apiUrl('/api/v1/outreach/templates')),
+        fetch(apiUrl('/api/v1/outreach/enrollments'))
       ]);
       if (seqRes.ok) setSequences(await seqRes.json());
       if (tempRes.ok) setTemplates(await tempRes.json());
@@ -84,15 +95,17 @@ export default function Dashboard() {
     } finally {
       setLoadingOutreach(false);
     }
-  };
+  }, []);
 
   const handleTogglePause = async (id: string) => {
     try {
-      const response = await fetch(`http://localhost:3001/api/v1/outreach/enrollments/${id}/toggle-pause`, {
+      const response = await fetch(apiUrl(`/api/v1/outreach/enrollments/${id}/toggle-pause`), {
         method: 'POST'
       });
       if (response.ok) {
         fetchOutreachData();
+      } else {
+        alert(`Could not toggle enrollment: ${await readApiError(response, response.statusText)}`);
       }
     } catch (e) {
       console.error(e);
@@ -102,7 +115,7 @@ export default function Dashboard() {
   const handleProcessQueue = async () => {
     setProcessingQueue(true);
     try {
-      const response = await fetch('http://localhost:3001/api/v1/outreach/process', {
+      const response = await fetch(apiUrl('/api/v1/outreach/process'), {
         method: 'POST'
       });
       if (response.ok) {
@@ -110,6 +123,8 @@ export default function Dashboard() {
         alert('Queue processing complete!');
         fetchOutreachData();
         fetchLeads();
+      } else {
+        alert(`Queue processing failed: ${await readApiError(response, response.statusText)}`);
       }
     } catch (e) {
       console.error(e);
@@ -119,10 +134,10 @@ export default function Dashboard() {
     }
   };
 
-  const fetchLeads = async () => {
+  const fetchLeads = useCallback(async () => {
     setLoading(true);
     try {
-      const url = new URL('http://localhost:3001/api/v1/leads');
+      const url = new URL(apiUrl('/api/v1/leads'));
       if (filterNoWebsite) url.searchParams.append('has_website', 'false');
       if (filterScale !== 'all') url.searchParams.append('scale', filterScale);
       if (filterStatus !== 'all') url.searchParams.append('contact_status', filterStatus);
@@ -142,12 +157,18 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder, scrapeLat, scrapeLng]);
 
+  // Re-fetch leads whenever a filter, sort option or reference point changes.
   useEffect(() => {
     fetchLeads();
+  }, [fetchLeads]);
+
+  // Outreach data does not depend on the lead filters, so load it once on mount
+  // (it is refreshed explicitly after pause/resume and queue runs).
+  useEffect(() => {
     fetchOutreachData();
-  }, [filterNoWebsite, filterScale, filterStatus, searchTerm, sortBy, sortOrder, scrapeLat, scrapeLng]);
+  }, [fetchOutreachData]);
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
@@ -191,7 +212,7 @@ export default function Dashboard() {
         };
       }
       
-      const response = await fetch('http://localhost:3001/api/v1/leads/bulk-action', {
+      const response = await fetch(apiUrl('/api/v1/leads/bulk-action'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyData)
@@ -202,8 +223,7 @@ export default function Dashboard() {
         setSelectedLeads([]);
         fetchLeads();
       } else {
-        const error = await response.json();
-        alert(`Error: ${error.error}`);
+        alert(`Error: ${await readApiError(response, 'Bulk action failed')}`);
       }
     } catch (e) {
       console.error(e);
@@ -215,7 +235,7 @@ export default function Dashboard() {
     e.preventDefault();
     setScraping(true);
     try {
-      const response = await fetch('http://localhost:3001/api/v1/scrape', {
+      const response = await fetch(apiUrl('/api/v1/scrape'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -231,7 +251,7 @@ export default function Dashboard() {
         setShowScrapeModal(false);
         fetchLeads();
       } else {
-        alert('Failed to start scraper. Please try again.');
+        alert(`Failed to start scraper: ${await readApiError(response, 'please try again.')}`);
       }
     } catch (err) {
       console.error(err);
@@ -245,7 +265,7 @@ export default function Dashboard() {
     e.preventDefault();
     if (!newNote.trim() || !activeLeadNotesId) return;
     try {
-      const response = await fetch(`http://localhost:3001/api/v1/leads/${activeLeadNotesId}/notes`, {
+      const response = await fetch(apiUrl(`/api/v1/leads/${activeLeadNotesId}/notes`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: newNote })
@@ -255,7 +275,7 @@ export default function Dashboard() {
         setNewNote('');
         setActiveLeadNotesId(null);
       } else {
-        alert('Failed to save note.');
+        alert(`Failed to save note: ${await readApiError(response, response.statusText)}`);
       }
     } catch (err) {
       console.error(err);

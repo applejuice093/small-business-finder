@@ -1,6 +1,7 @@
 import { db } from '../config/database.js';
 import nodemailer from 'nodemailer';
 import twilio from 'twilio';
+import { renderTemplate } from './templates.js';
 
 interface SequenceStep {
   id: string;
@@ -122,7 +123,14 @@ async function dispatchMessage(
   }
 }
 
-export async function processOutreachQueue() {
+/**
+ * Walks every active (not completed, not paused) enrollment and sends the next
+ * sequence step once its wait_days window has elapsed. Each send is logged to
+ * outreach_messages and advances the enrollment's current_step.
+ *
+ * Throws if a database error interrupts the run.
+ */
+export async function processOutreachQueue(): Promise<void> {
   console.log('[Outreach Worker] Running outreach queue processing...');
 
   try {
@@ -198,9 +206,9 @@ export async function processOutreachQueue() {
 
       // 4. Parse the template with business context variables
       const renderedSubject = step.subject 
-        ? replaceVariables(step.subject, enrollment) 
+        ? renderTemplate(step.subject, enrollment) 
         : undefined;
-      const renderedBody = replaceVariables(step.body, enrollment);
+      const renderedBody = renderTemplate(step.body, enrollment);
 
       // 5. Fetch recipient contact details
       const contactType = step.channel === 'email' ? 'email' : 'phone';
@@ -274,13 +282,8 @@ export async function processOutreachQueue() {
 
   } catch (error) {
     console.error('[Outreach Worker] Error during worker run:', error);
+    // Re-throw so callers (e.g. POST /api/v1/outreach/process) can report the
+    // failure instead of claiming the queue was processed successfully.
+    throw error;
   }
-}
-
-function replaceVariables(text: string, context: any): string {
-  return text
-    .replace(/\\n/g, '\n')
-    .replace(/\{\{\s*business_name\s*\}\}/g, context.business_name || 'Business')
-    .replace(/\{\{\s*category\s*\}\}/g, context.business_category || 'industry')
-    .replace(/\{\{\s*city\s*\}\}/g, context.business_city || 'your area');
 }

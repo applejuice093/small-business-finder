@@ -1,32 +1,32 @@
-# React + TypeScript + Vite
+# LeadStream Pro — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite + Tailwind CSS dashboard for the LeadStream Pro lead discovery and
+outreach system. See the [root README](../README.md) for the full setup
+(database, backend, environment variables).
 
-Currently, two official plugins are available:
+## Scripts
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Run from this folder, or from the repo root with `pnpm --filter frontend <script>`:
 
-## React Compiler
+| Script | Description |
+| :--- | :--- |
+| `pnpm dev` | Start the Vite dev server on http://localhost:5173 |
+| `pnpm build` | Type-check (`tsc -b`) and build to `dist/` |
+| `pnpm lint` | Run Oxlint (React, TypeScript and Oxc rule sets) |
+| `pnpm preview` | Serve the production build locally |
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Configuration
 
-## Expanding the Oxlint configuration
+The dashboard calls the backend at `http://localhost:3001` by default. To point it
+elsewhere, set `VITE_API_BASE_URL`, for example in `frontend/.env.local`:
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+VITE_API_BASE_URL=http://192.168.1.20:3001
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Structure
+
+- `src/components/Dashboard.tsx` — leads table, filters, scraping modal, notes,
+  outreach sequences/templates/enrollments tabs.
+- `src/config.ts` — API base URL helper (`apiUrl('/api/v1/...')`).
+- `src/App.tsx` / `src/main.tsx` — app shell and React root.

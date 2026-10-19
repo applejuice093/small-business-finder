@@ -5,6 +5,11 @@
   "scripts": {
     "dev:backend": "pnpm --filter business-discovery-outreach-backend dev",
     "dev:frontend": "pnpm --filter frontend dev",
-    "dev": "pnpm -r --parallel dev"
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm --filter business-discovery-outreach-backend typecheck",
+    "lint": "pnpm --filter frontend lint",
+    "test": "pnpm --filter business-discovery-outreach-backend test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   }
 }
