@@ -22,6 +22,16 @@ import {
 } from 'lucide-react';
 import { apiUrl } from '../config.js';
 
+/** Extracts the backend's `{ error }` message from a failed response, if any. */
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    return typeof body?.error === 'string' ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 interface Lead {
   id: string;
   name: string;
@@ -94,6 +104,8 @@ export default function Dashboard() {
       });
       if (response.ok) {
         fetchOutreachData();
+      } else {
+        alert(`Could not toggle enrollment: ${await readApiError(response, response.statusText)}`);
       }
     } catch (e) {
       console.error(e);
@@ -111,6 +123,8 @@ export default function Dashboard() {
         alert('Queue processing complete!');
         fetchOutreachData();
         fetchLeads();
+      } else {
+        alert(`Queue processing failed: ${await readApiError(response, response.statusText)}`);
       }
     } catch (e) {
       console.error(e);
@@ -209,8 +223,7 @@ export default function Dashboard() {
         setSelectedLeads([]);
         fetchLeads();
       } else {
-        const error = await response.json();
-        alert(`Error: ${error.error}`);
+        alert(`Error: ${await readApiError(response, 'Bulk action failed')}`);
       }
     } catch (e) {
       console.error(e);
@@ -238,7 +251,7 @@ export default function Dashboard() {
         setShowScrapeModal(false);
         fetchLeads();
       } else {
-        alert('Failed to start scraper. Please try again.');
+        alert(`Failed to start scraper: ${await readApiError(response, 'please try again.')}`);
       }
     } catch (err) {
       console.error(err);
@@ -262,7 +275,7 @@ export default function Dashboard() {
         setNewNote('');
         setActiveLeadNotesId(null);
       } else {
-        alert('Failed to save note.');
+        alert(`Failed to save note: ${await readApiError(response, response.statusText)}`);
       }
     } catch (err) {
       console.error(err);
