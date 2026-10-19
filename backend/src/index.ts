@@ -11,6 +11,7 @@ import {
   parseFiniteNumber,
   isBusinessScale,
   isContactStatus,
+  isUuid,
 } from './lib/validation.js';
 
 dotenv.config();
@@ -178,16 +179,29 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
  * Perform actions (enrollment, tagging, status update) on multiple leads.
  */
 app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promise<void> => {
-  const { business_ids, action, params } = req.body;
+  const { business_ids, action } = req.body ?? {};
+  // `params` is optional for approve/reject; default to {} so destructuring
+  // below cannot throw "Cannot destructure property of undefined".
+  const params = req.body?.params ?? {};
 
   if (!business_ids || !Array.isArray(business_ids) || business_ids.length === 0) {
     res.status(400).json({ error: 'business_ids array is required' });
     return;
   }
 
+  const invalidIds = business_ids.filter((id: unknown) => !isUuid(id));
+  if (invalidIds.length > 0) {
+    res.status(400).json({ error: `business_ids must be UUIDs (invalid: ${invalidIds.slice(0, 5).join(', ')})` });
+    return;
+  }
+
   try {
     if (action === 'update_status') {
       const { contact_status } = params;
+      if (!isContactStatus(contact_status)) {
+        res.status(400).json({ error: `params.contact_status must be a valid contact status` });
+        return;
+      }
       await db.query(
         'UPDATE businesses SET contact_status = $1 WHERE id = ANY($2)',
         [contact_status, business_ids]
@@ -207,6 +221,14 @@ app.post('/api/v1/leads/bulk-action', async (req: Request, res: Response): Promi
       res.json({ success: true, message: `Rejected ${business_ids.length} leads` });
     } else if (action === 'enroll_sequence') {
       const { sequence_id, enrolled_by } = params;
+      if (!isUuid(sequence_id)) {
+        res.status(400).json({ error: 'params.sequence_id (UUID) is required for enroll_sequence' });
+        return;
+      }
+      if (enrolled_by !== undefined && !isUuid(enrolled_by)) {
+        res.status(400).json({ error: 'params.enrolled_by must be a UUID when provided' });
+        return;
+      }
 
       // First retrieve/create default user if no uuid was provided
       let userId = enrolled_by;
