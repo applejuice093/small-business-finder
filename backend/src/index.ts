@@ -3,7 +3,15 @@ import dotenv from 'dotenv';
 import { db } from './config/database.js';
 import { OsmConnector } from './scraper/connectors/osm.js';
 import { processOutreachQueue } from './outreach/worker.js';
-import { parseSortOrder, parsePagination } from './lib/validation.js';
+import {
+  parseSortOrder,
+  parsePagination,
+  parseLatitude,
+  parseLongitude,
+  parseFiniteNumber,
+  isBusinessScale,
+  isContactStatus,
+} from './lib/validation.js';
 
 dotenv.config();
 
@@ -63,6 +71,17 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       whereClauses.push(`has_website = $${queryParams.length}`);
     }
 
+    // Reject unknown enum values up front; otherwise PostgreSQL throws
+    // "invalid input value for enum" and the client gets an opaque 500.
+    if (scale && !isBusinessScale(scale)) {
+      res.status(400).json({ error: `Invalid scale "${String(scale)}"` });
+      return;
+    }
+    if (contact_status && !isContactStatus(contact_status)) {
+      res.status(400).json({ error: `Invalid contact_status "${String(contact_status)}"` });
+      return;
+    }
+
     // Filter by business scale
     if (scale) {
       queryParams.push(scale);
@@ -81,23 +100,24 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       whereClauses.push(`category ILIKE $${queryParams.length}`);
     }
 
-    // Calculate distance if coordinates provided (PostgreSQL POINT type distance operator <->)
-    if (ref_lat && ref_lng) {
-      const latNum = parseFloat(ref_lat as string);
-      const lngNum = parseFloat(ref_lng as string);
-      if (!isNaN(latNum) && !isNaN(lngNum)) {
-        // location <-> point(lng, lat) gives Euclidean distance in degrees.
-        // 1 degree ~ 111 km, or ~ 111000 meters.
-        const distanceCalc = `(location <-> point(${lngNum}, ${latNum})) * 111.0`;
-        
-        queryParts[0] += `, ${distanceCalc} AS distance_km`;
-        
-        if (radius_meters) {
-          const radiusKm = parseFloat(radius_meters as string) / 1000.0;
-          if (!isNaN(radiusKm)) {
-            whereClauses.push(`${distanceCalc} <= ${radiusKm}`);
-          }
-        }
+    // Reference point used for distance calculation / sorting (null if absent or invalid).
+    const refLat = parseLatitude(ref_lat);
+    const refLng = parseLongitude(ref_lng);
+    const hasRefPoint = refLat !== null && refLng !== null;
+
+    // Calculate distance if coordinates provided (PostgreSQL POINT type distance operator <->).
+    // refLat/refLng are validated finite numbers, so interpolating them is safe.
+    if (hasRefPoint) {
+      // location <-> point(lng, lat) gives Euclidean distance in degrees.
+      // 1 degree ~ 111 km, or ~ 111000 meters (an approximation that ignores
+      // longitude shrinking towards the poles).
+      const distanceCalc = `(location <-> point(${refLng}, ${refLat})) * 111.0`;
+
+      queryParts[0] += `, ${distanceCalc} AS distance_km`;
+
+      const radiusMeters = parseFiniteNumber(radius_meters);
+      if (radiusMeters !== null && radiusMeters > 0) {
+        whereClauses.push(`${distanceCalc} <= ${radiusMeters / 1000.0}`);
       }
     }
 
@@ -112,10 +132,9 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
 
     // Sorting
     let orderBy = 'ORDER BY ';
-    if (sort_by === 'distance' && ref_lat && ref_lng) {
-      const latNum = parseFloat(ref_lat as string);
-      const lngNum = parseFloat(ref_lng as string);
-      orderBy += `(location <-> point(${lngNum}, ${latNum})) ${sortOrder}`;
+    if (sort_by === 'distance' && hasRefPoint) {
+      // refLat/refLng are validated finite numbers, so interpolation is safe.
+      orderBy += `(location <-> point(${refLng}, ${refLat})) ${sortOrder}`;
     } else if (sort_by === 'opportunity_score') {
       orderBy += `opportunity_score ${sortOrder}`;
     } else if (sort_by === 'review_count') {
