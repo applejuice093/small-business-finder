@@ -560,7 +560,7 @@ app.post('/api/v1/outreach/process', async (req: Request, res: Response): Promis
     await processOutreachQueue();
     res.json({ success: true, message: 'Outreach queue processing complete' });
   } catch (error) {
-    console.error(error);
+    console.error('API Error in POST /outreach/process:', error);
     res.status(500).json({ error: 'Worker failed to run' });
   }
 });
