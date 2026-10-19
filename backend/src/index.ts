@@ -19,6 +19,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+const DEFAULT_SCRAPE_RADIUS_METERS = 5000;
+const MAX_SCRAPE_RADIUS_METERS = 50000;
+
 // Native CORS headers middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -326,20 +329,36 @@ app.post('/api/v1/leads/:id/notes', async (req: Request, res: Response): Promise
  * Manually trigger scraping for a location/query.
  */
 app.post('/api/v1/scrape', async (req: Request, res: Response): Promise<void> => {
-  const { query, latitude, longitude, radius_meters } = req.body;
+  const { query, latitude, longitude, radius_meters } = req.body ?? {};
 
-  if (!query || latitude === undefined || longitude === undefined) {
+  if (typeof query !== 'string' || query.trim() === '' || latitude === undefined || longitude === undefined) {
     res.status(400).json({ error: 'query, latitude, and longitude are required' });
+    return;
+  }
+
+  const lat = parseLatitude(latitude);
+  const lng = parseLongitude(longitude);
+  if (lat === null || lng === null) {
+    res.status(400).json({ error: 'latitude must be within [-90, 90] and longitude within [-180, 180]' });
+    return;
+  }
+
+  // Default 5 km; cap at 50 km to keep Overpass queries (and email crawling) bounded.
+  const radiusMeters = radius_meters === undefined || radius_meters === null || radius_meters === ''
+    ? DEFAULT_SCRAPE_RADIUS_METERS
+    : parseFiniteNumber(radius_meters);
+  if (radiusMeters === null || radiusMeters <= 0 || radiusMeters > MAX_SCRAPE_RADIUS_METERS) {
+    res.status(400).json({ error: `radius_meters must be a number between 1 and ${MAX_SCRAPE_RADIUS_METERS}` });
     return;
   }
 
   try {
     const connector = new OsmConnector();
     const scrapedLeads = await connector.scrape({
-      query,
-      latitude: parseFloat(latitude),
-      longitude: parseFloat(longitude),
-      radiusMeters: parseFloat(radius_meters || '5000')
+      query: query.trim(),
+      latitude: lat,
+      longitude: lng,
+      radiusMeters,
     });
 
     let savedCount = 0;
