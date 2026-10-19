@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Clock
 } from 'lucide-react';
+import { apiUrl } from '../config.js';
 
 interface Lead {
   id: string;
@@ -72,9 +73,9 @@ export default function Dashboard() {
     setLoadingOutreach(true);
     try {
       const [seqRes, tempRes, enrollRes] = await Promise.all([
-        fetch('http://localhost:3001/api/v1/outreach/sequences'),
-        fetch('http://localhost:3001/api/v1/outreach/templates'),
-        fetch('http://localhost:3001/api/v1/outreach/enrollments')
+        fetch(apiUrl('/api/v1/outreach/sequences')),
+        fetch(apiUrl('/api/v1/outreach/templates')),
+        fetch(apiUrl('/api/v1/outreach/enrollments'))
       ]);
       if (seqRes.ok) setSequences(await seqRes.json());
       if (tempRes.ok) setTemplates(await tempRes.json());
@@ -88,7 +89,7 @@ export default function Dashboard() {
 
   const handleTogglePause = async (id: string) => {
     try {
-      const response = await fetch(`http://localhost:3001/api/v1/outreach/enrollments/${id}/toggle-pause`, {
+      const response = await fetch(apiUrl(`/api/v1/outreach/enrollments/${id}/toggle-pause`), {
         method: 'POST'
       });
       if (response.ok) {
@@ -102,7 +103,7 @@ export default function Dashboard() {
   const handleProcessQueue = async () => {
     setProcessingQueue(true);
     try {
-      const response = await fetch('http://localhost:3001/api/v1/outreach/process', {
+      const response = await fetch(apiUrl('/api/v1/outreach/process'), {
         method: 'POST'
       });
       if (response.ok) {
@@ -122,7 +123,7 @@ export default function Dashboard() {
   const fetchLeads = async () => {
     setLoading(true);
     try {
-      const url = new URL('http://localhost:3001/api/v1/leads');
+      const url = new URL(apiUrl('/api/v1/leads'));
       if (filterNoWebsite) url.searchParams.append('has_website', 'false');
       if (filterScale !== 'all') url.searchParams.append('scale', filterScale);
       if (filterStatus !== 'all') url.searchParams.append('contact_status', filterStatus);
@@ -191,7 +192,7 @@ export default function Dashboard() {
         };
       }
       
-      const response = await fetch('http://localhost:3001/api/v1/leads/bulk-action', {
+      const response = await fetch(apiUrl('/api/v1/leads/bulk-action'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyData)
@@ -215,7 +216,7 @@ export default function Dashboard() {
     e.preventDefault();
     setScraping(true);
     try {
-      const response = await fetch('http://localhost:3001/api/v1/scrape', {
+      const response = await fetch(apiUrl('/api/v1/scrape'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -245,7 +246,7 @@ export default function Dashboard() {
     e.preventDefault();
     if (!newNote.trim() || !activeLeadNotesId) return;
     try {
-      const response = await fetch(`http://localhost:3001/api/v1/leads/${activeLeadNotesId}/notes`, {
+      const response = await fetch(apiUrl(`/api/v1/leads/${activeLeadNotesId}/notes`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: newNote })
