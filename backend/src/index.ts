@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import { db } from './config/database.js';
 import { OsmConnector } from './scraper/connectors/osm.js';
 import { processOutreachQueue } from './outreach/worker.js';
-import { parseSortOrder } from './lib/validation.js';
+import { parseSortOrder, parsePagination } from './lib/validation.js';
 
 dotenv.config();
 
@@ -38,8 +38,8 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       ref_lat,
       ref_lng,
       radius_meters,
-      limit = '20',
-      page = '1',
+      limit,
+      page,
       sort_by = 'opportunity_score',
       order,
     } = req.query;
@@ -48,8 +48,9 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
     // it must be whitelisted to 'asc' | 'desc' to prevent SQL injection.
     const sortOrder = parseSortOrder(order);
 
-    const limitVal = parseInt(limit as string, 10);
-    const offsetVal = (parseInt(page as string, 10) - 1) * limitVal;
+    // Clamp pagination to positive integers (limit capped at MAX_PAGE_SIZE) so
+    // ?limit=abc or ?page=-1 no longer produce NaN / negative OFFSET errors.
+    const { limit: limitVal, page: pageVal, offset: offsetVal } = parsePagination(limit, page);
 
     let queryParts = ['SELECT id, name, category, address, location, has_website, website_url, scale, review_count, review_rating, opportunity_score, contact_status, confidence_score, created_at'];
     let countQueryParts = ['SELECT COUNT(*) FROM businesses'];
@@ -142,7 +143,7 @@ app.get('/api/v1/leads', async (req: Request, res: Response): Promise<void> => {
       data: dataResult.rows,
       pagination: {
         total: totalLeads,
-        page: parseInt(page as string, 10),
+        page: pageVal,
         limit: limitVal,
         pages: Math.ceil(totalLeads / limitVal),
       },
